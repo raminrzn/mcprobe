@@ -30,15 +30,16 @@ gateway <- function(...) {
 
   func <- arguments$func
   if (is.null(func)) func <- "model_run"
+  callback_url <- arguments$callback_url
+  execution_id <- arguments$execution_id
+  async <- isTRUE(as.logical(arguments$async))
 
-  # The platform injects execution_id and callback_url into funcInput unless
-  # ignoreDefaultInput is set. Strip them alongside the other control fields so
-  # they never reach the model function as stray arguments.
   arguments$func <- NULL
   arguments$api_key <- NULL
   arguments$session_id <- NULL
   arguments$execution_id <- NULL
   arguments$callback_url <- NULL
+  arguments$async <- NULL
 
   out <- if (length(arguments) == 0) {
     do.call(func, list())
@@ -46,10 +47,23 @@ gateway <- function(...) {
     do.call(func, arguments)
   }
 
-  # digits = NA preserves full floating-point precision. The default rounds to
-  # 4 significant digits, which silently corrupts small probabilities
-  # (0.008917 -> 0.0089) — a wrong answer returned without any error.
-  jsonlite::toJSON(out, dataframe = "rows", na = "null", digits = NA)
+  json <- jsonlite::toJSON(out, dataframe = "rows", na = "null", digits = NA)
+  # Asynchronous calls finish by posting the result to the callback URL.
+  if (async && !is.null(callback_url)) {
+    send_callback(callback_url, execution_id, json)
+  }
+  json
+}
+
+send_callback <- function(callback_url, execution_id, json) {
+  body <- paste0('{"execution_id":', jsonlite::toJSON(execution_id, auto_unbox = TRUE),
+                 ',"func_output":', json, '}')
+  h <- curl::new_handle()
+  curl::handle_setheaders(h, "Content-Type" = "application/json")
+  curl::handle_setopt(h, post = TRUE, postfields = body)
+  tryCatch(curl::curl_fetch_memory(callback_url, handle = h),
+           error = function(e) message("callback failed: ", conditionMessage(e)))
+  invisible(NULL)
 }
 
 #' Run the model via the PRISM-style entry point

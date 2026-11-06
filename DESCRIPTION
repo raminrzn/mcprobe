@@ -1,6 +1,6 @@
 Package: mcprobe
 Title: ModelsCloud Executor Diagnostics (Temporary)
-Version: 0.1.1
+Version: 0.1.2
 Authors@R: person("Ramin", "Rezaeianzadeh", email = "raminrzn@student.ubc.ca",
                   role = c("aut", "cre"))
 Description: Temporary diagnostics for the UBC ModelsCloud executor: R
@@ -12,5 +12,5 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
-Imports: jsonlite, parallel, stats, utils
+Imports: curl, jsonlite, parallel, stats, utils
 URL: https://github.com/raminrzn/mcprobe
