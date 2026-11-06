@@ -90,17 +90,23 @@ probe_inla <- function() {
              CRAN = "https://cloud.r-project.org")
   timed <- function(expr) {
     t0 <- Sys.time()
-    msg <- tryCatch({ force(expr); "ok" }, error = function(e) conditionMessage(e))
-    list(result = msg, seconds = as.numeric(Sys.time() - t0, units = "secs"))
+    warns <- character(0)
+    msg <- tryCatch(withCallingHandlers({ force(expr); "ok" }, warning = function(w) {
+      warns <<- c(warns, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }), error = function(e) conditionMessage(e))
+    list(result = msg, warnings = warns,
+         seconds = as.numeric(Sys.time() - t0, units = "secs"))
   }
   out <- list()
   out$install <- timed(utils::install.packages(c("INLA", "splancs"), lib = lib,
                                                repos = repos, quiet = TRUE,
                                                dependencies = c("Depends", "Imports", "LinkingTo")))
-  out$installed <- c(INLA = dir.exists(file.path(lib, "INLA")),
-                     fmesher = dir.exists(file.path(lib, "fmesher")) ||
-                       "fmesher" %in% rownames(utils::installed.packages()),
-                     splancs = dir.exists(file.path(lib, "splancs")))
+  pk <- c("INLA", "fmesher", "splancs", "sf", "units", "s2", "wk", "classInt", "sp")
+  out$installed <- as.list(vapply(pk, function(p) dir.exists(file.path(lib, p)) ||
+                                    p %in% rownames(utils::installed.packages()), logical(1)))
+  out$system_libraries <- sh(paste("dpkg -l 2>/dev/null | awk '{print $2, $3}' |",
+                                   "grep -Ei 'gdal|geos|proj|udunits|abseil|cmake|sqlite3|jags|gfortran'"))
   out$load <- timed(loadNamespace("INLA", lib.loc = c(lib, .libPaths())))
   out$fit <- timed({
     d <- data.frame(y = stats::rnorm(50), x = stats::rnorm(50))

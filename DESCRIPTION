@@ -1,6 +1,6 @@
 Package: mcprobe
 Title: ModelsCloud Executor Diagnostics (Temporary)
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: person("Ramin", "Rezaeianzadeh", email = "raminrzn@student.ubc.ca",
                   role = c("aut", "cre"))
 Description: Temporary diagnostics for the UBC ModelsCloud executor: R
