@@ -9,7 +9,8 @@ model_run(action = "info", seconds = 1, x = NULL, ...)
 \arguments{
 \item{action}{\code{"info"} (environment), \code{"echo"} (size of the input received),
 \code{"sleep"} (wait \code{seconds}), \code{"inla"} (install and run INLA in a temporary
-library) or \code{"jags"} (look for the JAGS library).}
+library), \code{"jags"} (look for the JAGS library) or \code{"dynamo"} (run the
+hiaR DYNAMO-HIA tutorial; call asynchronously).}
 
 \item{seconds}{Seconds to wait for \code{action = "sleep"}.}
 

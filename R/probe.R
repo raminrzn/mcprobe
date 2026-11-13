@@ -2,7 +2,8 @@
 #'
 #' @param action `"info"` (environment), `"echo"` (size of the input received),
 #'   `"sleep"` (wait `seconds`), `"inla"` (install and run INLA in a temporary
-#'   library) or `"jags"` (look for the JAGS library).
+#'   library), `"jags"` (look for the JAGS library) or `"dynamo"` (run the
+#'   hiaR DYNAMO-HIA tutorial; call asynchronously).
 #' @param seconds Seconds to wait for `action = "sleep"`.
 #' @param x Any data, for `action = "echo"`.
 #' @param ... Ignored.
@@ -15,6 +16,7 @@ model_run <- function(action = "info", seconds = 1, x = NULL, ...) {
          sleep = probe_sleep(seconds),
          inla = probe_inla(),
          jags = probe_jags(),
+         dynamo = probe_dynamo(),
          stop("Unknown action: ", action, call. = FALSE))
 }
 
@@ -122,4 +124,78 @@ probe_jags <- function() {
   list(jags_binary = unname(Sys.which("jags")),
        libjags = sh("ldconfig -p | grep -i jags"),
        pkg_config = sh("pkg-config --modversion jags"))
+}
+
+# Runs the hiaR tutorial ("Introduction to hiaR", hiaR commit 6ba62ff) on the
+# executor: installs hiaR into a temporary library, downloads RIVM's Linux
+# build of the DYNAMO-HIA engine with hiaR's own download function, runs the
+# Dutch smoking / lung cancer example and returns the first rows of the
+# results with each step's timing and error. Nothing is kept after the job.
+probe_dynamo <- function(release_tag = "v3.0.0-beta.1",
+                         hiar_ref = "6ba62ff56308486c457ed53019cfd2c280e087be") {
+  lib <- file.path(tempdir(), "dynamo_lib")
+  dir.create(lib, showWarnings = FALSE)
+  .libPaths(c(lib, .libPaths()))
+  steps <- list()
+  step <- function(name, expr) {
+    t0 <- Sys.time()
+    res <- tryCatch(list(ok = TRUE, value = force(expr)),
+                    error = function(e) list(ok = FALSE, error = conditionMessage(e)))
+    res$seconds <- as.numeric(Sys.time() - t0, units = "secs")
+    steps[[name]] <<- res[setdiff(names(res), "value")]
+    res
+  }
+  step("install_hiaR", remotes::install_github("Dynamo-HIA/hiaR", ref = hiar_ref, lib = lib,
+                                               upgrade = "never", build_vignettes = FALSE,
+                                               quiet = TRUE, repos = "https://cloud.r-project.org"))
+  if (!steps$install_hiaR$ok) return(list(steps = steps))
+  hia <- asNamespace("hiaR")
+  temp_dir <- tempfile("dynamo")
+  dir.create(temp_dir)
+  sim <- "Netherlands_Smoking_Intervention"
+  step("configure", {
+    fs::dir_copy(system.file("extdata", "example-nl", package = "hiaR", lib.loc = lib),
+                 temp_dir, overwrite = TRUE)
+    smoking <- hia$configure_risk_factor(name = "Smoking_cat3",
+      transition_filename = "NL_RF_smoking_Transitions_Netto",
+      prevalence_filename = "NL_RF_smoking_cat3_Prev_V1")
+    lung <- hia$configure_disease(name = "Lung_Cancer",
+      prevalence_filename = "NL_disease_LungCa_Prev_V2",
+      incidence_filename = "NL_disease_LungCa_Inc_V2",
+      excess_mortality_filename = "NL_disease_LungCa_ExecMor_V2",
+      disability_weights_filename = "NL_disease_LungCa_DALY_V1")
+    rr <- hia$configure_relative_risk(index = 0, from = "Smoking_cat3", to = "Lung_Cancer",
+      relative_risk_filename = "RR_to_LungCa-Smoking_cat3")
+    scen <- hia$configure_scenario(name = "All_Never_Smokers",
+      transition_filename = "NL_RF_smoking_Transitions_Netto",
+      prevalence_filename = "RF_smoking_cat_All_Never_Smokers_Prev")
+    hia$create_simulation_dir(simulation_name = fs::path(temp_dir, "Simulations", sim),
+      population_name = "Netherlands", has_newborns = TRUE, starting_year = 2010,
+      number_of_years = 10, population_size = 10, min_age = 0, max_age = 95, time_step = 1,
+      ref_scenario_name = "Netherlands_Reference_Scenario", random_seed = 42,
+      scenarios = list(scen), diseases = list(lung), risk_factors = smoking,
+      relative_risks = list(rr))
+    write(sim, fs::path(temp_dir, "simulation_names.txt"))
+  })
+  step("download_engine", hia$download_github_release(
+    repo_url = "https://github.com/Dynamo-HIA/dynamo-hia", release_tag = release_tag,
+    dest_dir = temp_dir))
+  exe <- file.path(temp_dir, Sys.getenv("DYNAMO_HIA_PATH"))
+  engine <- list(path = Sys.getenv("DYNAMO_HIA_PATH"), exists = file.exists(exe),
+                 executable = file.access(exe, 1) == 0,
+                 runtime_release = read_lines(file.path(dirname(dirname(exe)), "lib", "runtime", "release")))
+  step("run_engine", withr::with_dir(temp_dir, hia$run_dynamo_hia("simulation_names.txt", exe)))
+  sim_dir <- file.path(temp_dir, "Simulations", sim)
+  files <- list.files(temp_dir, recursive = TRUE, include.dirs = FALSE)
+  files <- files[!grepl("^DYNAMO-HIA/|Reference_Data/", files)]
+  pop <- step("load_batchoutput", hia$load_simulation_results(temp_dir, sim, type = "batchoutput"))
+  le <- step("load_cohortLE", hia$load_simulation_results(temp_dir, sim, type = "cohortLE"))
+  log_file <- file.path(temp_dir, "run_dynamo_hia.log")
+  list(steps = steps, engine = engine, result_files = utils::head(files, 60),
+       batchoutput_head = if (pop$ok) utils::head(pop$value, 6) else NULL,
+       batchoutput_rows = if (pop$ok) nrow(pop$value) else NULL,
+       cohortLE_head = if (le$ok) utils::head(le$value, 6) else NULL,
+       log_tail = if (file.exists(log_file)) utils::tail(readLines(log_file, warn = FALSE), 30) else NULL,
+       hiaR_version = tryCatch(as.character(utils::packageVersion("hiaR", lib.loc = lib)),
+                               error = function(e) NA))
 }
