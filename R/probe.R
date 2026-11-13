@@ -17,6 +17,7 @@ model_run <- function(action = "info", seconds = 1, x = NULL, ...) {
          inla = probe_inla(),
          jags = probe_jags(),
          dynamo = probe_dynamo(),
+         dynamo_shim = probe_dynamo(case_shim = TRUE),
          stop("Unknown action: ", action, call. = FALSE))
 }
 
@@ -132,7 +133,8 @@ probe_jags <- function() {
 # Dutch smoking / lung cancer example and returns the first rows of the
 # results with each step's timing and error. Nothing is kept after the job.
 probe_dynamo <- function(release_tag = "v3.0.0-beta.1",
-                         hiar_ref = "6ba62ff56308486c457ed53019cfd2c280e087be") {
+                         hiar_ref = "6ba62ff56308486c457ed53019cfd2c280e087be",
+                         case_shim = FALSE) {
   lib <- file.path(tempdir(), "dynamo_lib")
   dir.create(lib, showWarnings = FALSE)
   .libPaths(c(lib, .libPaths()))
@@ -184,6 +186,22 @@ probe_dynamo <- function(release_tag = "v3.0.0-beta.1",
   engine <- list(path = Sys.getenv("DYNAMO_HIA_PATH"), exists = file.exists(exe),
                  executable = file.access(exe, 1) == 0,
                  runtime_release = read_lines(file.path(dirname(dirname(exe)), "lib", "runtime", "release")))
+  # Optional: the engine opens some folders in lower case (e.g. "prevalences")
+  # while the data use capitals ("Prevalences"); Windows and macOS ignore
+  # case, Linux does not. Add a lower-case symbolic link next to every folder
+  # and file with capitals in its name (data and simulation folders only).
+  shims <- 0L
+  if (case_shim) step("case_shim", {
+    for (d in c("Reference_Data", "Simulations")) {
+      paths <- c(file.path(temp_dir, d), list.files(file.path(temp_dir, d), recursive = TRUE,
+                                                    full.names = TRUE, include.dirs = TRUE))
+      for (p in rev(paths)) {
+        b <- basename(p); lb <- tolower(b); target <- file.path(dirname(p), lb)
+        if (b != lb && !file.exists(target)) { file.symlink(b, target); shims <- shims + 1L }
+      }
+    }
+    shims
+  })
   step("run_engine", withr::with_dir(temp_dir, hia$run_dynamo_hia("simulation_names.txt", exe)))
   sim_dir <- file.path(temp_dir, "Simulations", sim)
   files <- list.files(temp_dir, recursive = TRUE, include.dirs = FALSE)
@@ -191,7 +209,7 @@ probe_dynamo <- function(release_tag = "v3.0.0-beta.1",
   pop <- step("load_batchoutput", hia$load_simulation_results(temp_dir, sim, type = "batchoutput"))
   le <- step("load_cohortLE", hia$load_simulation_results(temp_dir, sim, type = "cohortLE"))
   log_file <- file.path(temp_dir, "run_dynamo_hia.log")
-  list(steps = steps, engine = engine, result_files = utils::head(files, 60),
+  list(steps = steps, engine = engine, case_links = shims, result_files = utils::head(files, 60),
        batchoutput_head = if (pop$ok) utils::head(pop$value, 6) else NULL,
        batchoutput_rows = if (pop$ok) nrow(pop$value) else NULL,
        cohortLE_head = if (le$ok) utils::head(le$value, 6) else NULL,
